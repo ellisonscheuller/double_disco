@@ -1,0 +1,13 @@
+{
+  "base_url": "/user/ellison.julie.scheuller@cern.ch/",
+  "hostname": "0.0.0.0",
+  "password": false,
+  "pid": 39,
+  "port": 8888,
+  "root_dir": "/home/jovyan",
+  "secure": false,
+  "sock": "",
+  "token": "77ea63b5cb21482c90c92dd1759b5b80",
+  "url": "http://jupyter-ellison-2ejulie-2escheuller-40cern-2ech:8888/user/ellison.julie.scheuller@cern.ch/",
+  "version": "2.14.0"
+}
