@@ -48,9 +48,9 @@ class CylPtPzMAE(torch.nn.Module):
         y_p_den = y_p * s + b
 
         #get pt (index 0) and eta (index 1) for truth and predictions
-        pt_t  = y_t_den[:, :, 0]  # (B, N)
+        pt_t = y_t_den[:, :, 0]  # (B, N)
         eta_t = y_t_den[:, :, 1]
-        pt_p  = y_p_den[:, :, 0]
+        pt_p = y_p_den[:, :, 0]
         eta_p = y_p_den[:, :, 1]
 
         # Safety clamps:
@@ -64,9 +64,6 @@ class CylPtPzMAE(torch.nn.Module):
 
         #calculate error
         err = (pt_t - pt_p).abs() + (pz_t - pz_p).abs()
-
-        #replace NaN or inf values with large finite numbers so loss stays finite
-        #err = torch.nan_to_num(err, nan=0.0, posinf=1e6, neginf=1e6)
 
         #return mean error
         return err.mean(dim=1)

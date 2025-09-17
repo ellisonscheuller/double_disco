@@ -41,7 +41,7 @@ class Encoder(nn.Module):
         h = self.backbone(x)
 
         #mean vector
-        z_mean   = self.fc_mean(h)
+        z_mean = self.fc_mean(h)
 
         #log var vector
         z_logvar = self.fc_logvar(h)
@@ -114,10 +114,10 @@ class VAE(nn.Module):
         self.reco_scale = self.alpha * (1.0 - self.beta)
         self.kl_scale   = self.beta
 
-        features    = config["features"]
+        features = config["features"]
         latent_dim  = config["latent_dim"]
-        enc_nodes   = config["encoder_config"]["nodes"]
-        dec_nodes   = config["decoder_config"]["nodes"]
+        enc_nodes = config["encoder_config"]["nodes"]
+        dec_nodes = config["decoder_config"]["nodes"]
 
         #build encoder and decoder
         self.encoder = Encoder(features, enc_nodes, latent_dim, zero_init_logvar=True)

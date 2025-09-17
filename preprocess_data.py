@@ -64,15 +64,15 @@ def sort_top_n(name, N):
         if pt_i.size:
             #sort to descending and take first N
             pt_order = np.argsort(pt_i)[-N:][::-1]  
-            top_objects = [(float(pt_i[j]), float(eta_i[j]), float(phi_i[j])) for j in pt_order]
+            objects = [(float(pt_i[j]), float(eta_i[j]), float(phi_i[j])) for j in pt_order]
         else:
-            top_objects = []
+            objects = []
 
         #pad entries as 0 if there are less than N objecst in a given event
-        while len(top_objects) < N:
-            objs.append((0.0, 0.0, 0.0))
+        while len(objects) < N:
+            objects.append((0.0, 0.0, 0.0))
 
-        result[event] = objs
+        result[event] = objects
     return result
 
 #loop thru files
@@ -85,6 +85,7 @@ for fname in files:
                 expressions=sum(scout_branches.values(), []),
                 library="ak"
             )
+            print("python still running")
             #events
             events = arrays["event"]
 
@@ -114,17 +115,15 @@ for fname in files:
             met_phi = arrays["ScoutingMET_phi"]
 
             #events in data lits
-            for i, event in enumerate(events):
-                if event not in data:
-                    data[event] = []
-
-                data[event].extend(electron_data.get(event, [(0.0., 0.0., 0.0.)]*4))
-                data[event].extend(muon_data.get(event, [(0.0., 0.0., 0.0.)]*4))
-                data[event].extend(photon_data.get(event, [(0.0., 0.0., 0.0.)]*4))
-                data[event].extend(jet_data.get(event, [(0.0., 0.0., 0.0.)]*10))
-                data[event].extend(fat_jet_data.get(event, [(0.0., 0.0., 0.0.)]*10))
-                data[event].append((met_pt[i], 0.0., met_phi[i]))
-
+            for i, _ in enumerate(events):
+                key = len(data)   
+                data[key] = []
+                data[key].extend(electron_data.get(int(events[i]),[(0.0,0.0,0.0)]*4))
+                data[key].extend(muon_data.get(int(events[i]), [(0.0,0.0,0.0)]*4))
+                data[key].extend(photon_data.get(int(events[i]), [(0.0,0.0,0.0)]*4))
+                data[key].extend(jet_data.get(int(events[i]), [(0.0,0.0,0.0)]*10))
+                data[key].extend(fat_jet_data.get(int(events[i]), [(0.0,0.0,0.0)]*10))
+                data[key].append((float(met_pt[i]), 0.0, float(met_phi[i])))
 
     except Exception as e:
         print(f"Error with {fname}: {e}")
@@ -134,11 +133,12 @@ print("Converting to h5")
 #convert to np array for each event
 DATA = np.array([data[event] for event in data], dtype=np.float32)
 
-#check shape (should be (n_events, 32, 3)
+#check shape (should be (n_events, 33, 3)
 print("Final shape:", DATA.shape)
 
 n_events = DATA.shape[0]
 #returns random permutation of indices 
+rng = np.random.default_rng(1337)
 idx = rng.permutation(n_events)
 
 #take 80 percent data for training
@@ -149,13 +149,54 @@ idx_train, idx_test = idx[:n_train], idx[n_train:]
 x_train = DATA[idx_train]
 x_test = DATA[idx_test]
 
-#TODO: normalization can go here but ask about it first
+#Normalization from Diptarko (maybe ask about this)
+#Ignores padded objects for statistics
+#Robust bounds from train (compute 1st and 99th percentiles and map to -1, +1)
+#Robust scaling  is done to make training stable (less saturation)
+percentiles = (1.0, 99.0)
+l1, h1 = -1.0, 1.0
+
+n_slots = x_train.shape[1]
+norm_scale = np.ones((n_slots, 3), dtype=np.float32)
+norm_bias = np.zeros((n_slots, 3), dtype=np.float32)
+
+#masks of padded rows (capture BEFORE transform)
+pad_train = (x_train[..., 0] == 0.0)
+pad_test = (x_test[...,  0] == 0.0)
+
+for i in range(n_slots):
+    # real (non-padded) rows in this slot on Train
+    mask = ~pad_train[:, i]
+    if np.any(mask):
+        vals = x_train[:, i, :][mask]
+        l0 = np.percentile(vals, percentiles[0], axis=0)
+        h0 = np.percentile(vals, percentiles[1], axis=0)
+
+        rng = h0 - l0
+        rng[rng == 0] = 1.0  # avoid divide-by-zero
+
+        denom = (h1 - l1)
+        norm_scale[i] = rng / denom
+        norm_bias[i]  = (l0 * h1 - h0 * l1) / denom
+    else:
+        # no real objects in this slot on Train → identity transform
+        norm_scale[i] = 1.0
+        norm_bias[i]  = 0.0
+
+# apply normalization
+x_train = (x_train - norm_bias) / norm_scale
+x_test  = (x_test  - norm_bias) / norm_scale
+
+# keep padded triplets exactly zero after normalization
+x_train[pad_train] = 0.0
+x_test[pad_test]   = 0.0
+
 
 #check shape (should be (n_events, 32, 3)
 print("Final shape:", DATA.shape)
 
 #convert to h5 file
-with h5py.File(args.out, "w") as f:
+with h5.File(args.out, "w") as f:
     bkg_group = f.create_group("Background_data")
 
     test_group = bkg_group.create_group("Test")
@@ -164,9 +205,9 @@ with h5py.File(args.out, "w") as f:
     train_group = bkg_group.create_group("Train")
     train_group.create_dataset("DATA", data=x_train, compression="gzip")
 
-    # norm_group = f.create_group("Normalization")
-    # norm_group.create_dataset("norm_bias", data=bias, compression="gzip")
-    # norm_group.create_dataset("norm_scale", data=scale, compression="gzip")
+    norm_group = f.create_group("Normalization")
+    norm_group.create_dataset("norm_bias", data=norm_bias, compression="gzip")
+    norm_group.create_dataset("norm_scale", data=norm_scale, compression="gzip")
 
 print(f"Saved to {args.out}")             
                 
