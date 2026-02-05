@@ -7,14 +7,17 @@ import awkward as ak
 
 JET_RADIUS = 0.4
 FATJET_RADIUS  = 0.8
+
+#make true if you want lepton/jet overlap
 ALLOW_OVERLAP = False
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--json", required=True, help="Path to dataset manifest JSON")
-parser.add_argument("--dataset", default="2024I", help="Dataset key in manifest")
+parser.add_argument("--json", required=True, help="Path to dataset")
+parser.add_argument("--dataset", default="2024I", help="Dataset key")
 parser.add_argument("--out", required=True, help="Output HDF5 path")
 args = parser.parse_args()
 
+#pick which top objects you want by pt
 top_objects = {
     "Electrons": 4,
     "Muons": 4,
@@ -24,6 +27,7 @@ top_objects = {
     "MET": 1
 }
 
+#choose what branches you want in the h5 for each object here
 scout_branches = {
     "Electrons": ["ScoutingElectron_pt", "ScoutingElectron_eta", "ScoutingElectron_phi", "event"],
     "MuonsVtx":  ["ScoutingMuonVtx_pt", "ScoutingMuonVtx_eta", "ScoutingMuonVtx_phi", "event"],
@@ -83,7 +87,6 @@ for coll, branches in scout_branches.items():
             extras_by_prefix[prefix].append(suffix)
 for p in extras_by_prefix:
     extras_by_prefix[p] = list(dict.fromkeys(extras_by_prefix[p]))
-
 N_FEATURES = 3 + (max((len(v) for v in extras_by_prefix.values()), default=0))
 
 #printout so you can debug
@@ -110,15 +113,13 @@ def deltaR(eta1, phi1, eta2, phi2):
     return np.hypot(eta1 - eta2, dphi(phi1, phi2))
 
 #lepton filtering
-def clean_collection_vs_leptons(arrays, coll_prefix, radius):
-    """
-    Remove objects in coll_prefix within delta R<radius of ANY lepton (Electrons + Muons vtx/no-vtx).
-    Returns a new awkward record array with that collection's branches filtered.
-    """
+def lepton_filt(arrays, coll_prefix, radius):
+    #gets object coords (jets or fat jets)
     c_eta = arrays[f"{coll_prefix}_eta"]
     c_phi = arrays[f"{coll_prefix}_phi"]
 
-    # Leptons 
+    #gets all possible lepton collections
+    #if the branch d/n exist than use empty awk array
     e_eta = arrays["ScoutingElectron_eta"] if "ScoutingElectron_eta" in arrays.fields else ak.Array([])
     e_phi = arrays["ScoutingElectron_phi"] if "ScoutingElectron_phi" in arrays.fields else ak.Array([])
     mv_eta = arrays["ScoutingMuonVtx_eta"] if "ScoutingMuonVtx_eta" in arrays.fields else ak.Array([])
@@ -128,7 +129,11 @@ def clean_collection_vs_leptons(arrays, coll_prefix, radius):
 
     keep_masks = []
     n_events = len(arrays["event"])
+
+    #loop over events
     for i in range(n_events):
+
+        #convert to np for math
         eta_c = np.asarray(c_eta[i], dtype=np.float32)
         phi_c = np.asarray(c_phi[i], dtype=np.float32)
 
@@ -166,6 +171,7 @@ def clean_collection_vs_leptons(arrays, coll_prefix, radius):
                     fil.append(ai)
             out = ak.with_field(out, ak.Array(fil), where=key)
     return out
+    
 def sort_top_n(name, N):
     pts  = arrays[f"{name}_pt"]
     etas = arrays[f"{name}_eta"] if f"{name}_eta" in arrays.fields else None
@@ -231,16 +237,12 @@ for idx_file, fname in enumerate(files, 1):
                 arrays_for_fatjets = arrays
                 print("Overlap allowed (hard-coded): skipping jet/fatjet cleaning")
             else:
-                arrays_for_jets = clean_collection_vs_leptons(
-                    arrays, coll_prefix="ScoutingPFJetRecluster", radius=JET_RADIUS
-                )
-                arrays_for_fatjets = clean_collection_vs_leptons(
-                    arrays, coll_prefix="ScoutingFatPFJetRecluster", radius=FATJET_RADIUS
-                )
-                print(f"  - Jet cleaning     : ΔR < {JET_RADIUS} to any lepton → removed")
-                print(f"  - FatJet cleaning  : ΔR < {FATJET_RADIUS} to any lepton → removed")
+                arrays_for_jets = lepton_filt(arrays, coll_prefix="ScoutingPFJetRecluster", radius=JET_RADIUS)
+                arrays_for_fatjets = lepton_filt(arrays, coll_prefix="ScoutingFatPFJetRecluster", radius=FATJET_RADIUS)
+                print(f"Jet cleaning: delta_R < {JET_RADIUS} wihtin lepton is removed")
+                print(f"Fatjet cleaning: delta_R < {FATJET_RADIUS} wihtin lepton is removed")
 
-            # Build Top-N (switch arrays appropriately for jets/fatjets)
+            #sort top N for all these objects 
             muon_vtx = sort_top_n("ScoutingMuonVtx", top_objects["Muons"])
             muon_no_vtx = sort_top_n("ScoutingMuonNoVtx", top_objects["Muons"])
             electron_data = sort_top_n("ScoutingElectron", top_objects["Electrons"])
@@ -295,7 +297,7 @@ for idx_file, fname in enumerate(files, 1):
         print(f"[WARN] Error with {fname}: {e}")                    
 
 #make h5
-print("Converting to h5 (assembling array) ...")
+print("Converting to h5...")
 DATA = np.array([data[event] for event in data], dtype=np.float32)
 print(f"Final DATA shape (n_events, 33, N_FEATURES): {DATA.shape}")
 print(f"Total events aggregated: {DATA.shape[0]}")
@@ -308,8 +310,9 @@ idx_train, idx_test = idx[:n_train], idx[n_train:]
 print(f"Split: train={len(idx_train)}  test={len(idx_test)}")
 
 x_train = DATA[idx_train]
-x_test  = DATA[idx_test]
+x_test = DATA[idx_test]
 
+#write to h5 in same format as AXO training data
 print(f"Writing HDF5 to: {args.out}")
 with h5.File(args.out, "w") as f:
     bkg_group = f.create_group("Background_data")
@@ -324,7 +327,7 @@ with h5.File(args.out, "w") as f:
         "jet_radius": float(JET_RADIUS),
         "fatjet_radius": float(FATJET_RADIUS),
         "allow_overlap": bool(ALLOW_OVERLAP),
-        "note": "RAW values; NO normalization; jets and fatjets cleaned vs ALL leptons unless ALLOW_OVERLAP=True"
+        "note": "no normalization, jets and fatjets cleaned vs all leptons"
     }
     f.attrs["meta_json"] = json.dumps(meta)
 
